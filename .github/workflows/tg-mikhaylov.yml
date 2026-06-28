@@ -1,0 +1,41 @@
+name: TG mikhaylov 03-07
+on:
+  schedule:
+    - cron: '0 9 3 7 *'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "check = только проверить токен; send = опубликовать сейчас"
+        default: "check"
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish to Telegram
+        env:
+          TG: ${{ secrets.TG_BOT_TOKEN }}
+          MODE: ${{ github.event.inputs.mode }}
+          EVENT: ${{ github.event_name }}
+          POST_DATE: "2026-07-03"
+          IMG: "https://raw.githubusercontent.com/kasianovaNa12/voleykon-img/main/tg/3-mikhaylov.jpg"
+          CAPURL: "https://raw.githubusercontent.com/kasianovaNa12/voleykon-img/main/tg/3-mikhaylov.txt"
+          CHAT: "@voleykon"
+        run: |
+          set -e
+          if [ -z "$TG" ]; then echo "::error::секрет TG_BOT_TOKEN не задан в настройках репозитория"; exit 1; fi
+          MODE="${MODE:-send}"
+          if [ "$EVENT" = "workflow_dispatch" ] && [ "$MODE" = "check" ]; then
+            echo "Проверка бота (getMe):"
+            curl -sS "https://api.telegram.org/bot$TG/getMe" | grep -o '"username":"[^"]*"' && echo "✅ токен рабочий, секрет на месте" || { echo "❌ getMe не прошёл"; exit 1; }
+            exit 0
+          fi
+          if [ "$EVENT" = "schedule" ]; then
+            TODAY=$(date -u +%F)
+            if [ "$TODAY" != "$POST_DATE" ]; then echo "сегодня $TODAY != $POST_DATE — пропуск (годовой повтор cron)"; exit 0; fi
+          fi
+          CAP=$(curl -sS "$CAPURL")
+          R=$(curl -sS --get "https://api.telegram.org/bot$TG/sendPhoto" --data-urlencode "chat_id=$CHAT" --data-urlencode "photo=$IMG" --data-urlencode "caption=$CAP")
+          if echo "$R" | grep -q '"message_id"'; then
+            MID=$(echo "$R" | grep -o '"message_id":[0-9]*' | grep -o '[0-9]*' | head -1)
+            echo "✅ опубликовано: https://t.me/voleykon/$MID"
+          else echo "❌ ошибка: $R"; exit 1; fi
