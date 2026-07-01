@@ -1,20 +1,20 @@
 name: TG mikhaylov 03-07
 on:
   schedule:
-    - cron: '0 9 3 7 *'
-  workflow_dispatch:
-    inputs:
-      mode:
-        description: "check = только проверить токен; send = опубликовать сейчас"
-        default: "check"
+    # много попыток в течение дня 03.07 (UTC 09:xx-12:xx = МСК 12:xx-15:xx).
+    # смещённые минуты — на :00 планировщик GitHub перегружен и чаще опаздывает.
+    - cron: '2,17,32,47 9-12 3 7 *'
+  workflow_dispatch: {}
+permissions:
+  contents: write
 jobs:
   post:
     runs-on: ubuntu-latest
     steps:
-      - name: Publish to Telegram
+      - name: Publish to Telegram (idempotent)
         env:
           TG: ${{ secrets.TG_BOT_TOKEN }}
-          MODE: ${{ github.event.inputs.mode }}
+          GH: ${{ github.token }}
           EVENT: ${{ github.event_name }}
           POST_DATE: "2026-07-03"
           IMG: "https://raw.githubusercontent.com/kasianovaNa12/voleykon-img/main/tg/3-mikhaylov.jpg"
@@ -22,20 +22,23 @@ jobs:
           CHAT: "@voleykon"
         run: |
           set -e
-          if [ -z "$TG" ]; then echo "::error::секрет TG_BOT_TOKEN не задан в настройках репозитория"; exit 1; fi
-          MODE="${MODE:-send}"
-          if [ "$EVENT" = "workflow_dispatch" ] && [ "$MODE" = "check" ]; then
-            echo "Проверка бота (getMe):"
-            curl -sS "https://api.telegram.org/bot$TG/getMe" | grep -o '"username":"[^"]*"' && echo "✅ токен рабочий, секрет на месте" || { echo "❌ getMe не прошёл"; exit 1; }
-            exit 0
-          fi
+          API="https://api.github.com/repos/${GITHUB_REPOSITORY}"
+          SENT="sent/3-mikhaylov.done"
+          # годовой cron повторяется каждый год 3 июля — на schedule сверяем дату
           if [ "$EVENT" = "schedule" ]; then
             TODAY=$(date -u +%F)
-            if [ "$TODAY" != "$POST_DATE" ]; then echo "сегодня $TODAY != $POST_DATE — пропуск (годовой повтор cron)"; exit 0; fi
+            if [ "$TODAY" != "$POST_DATE" ]; then echo "сегодня $TODAY != $POST_DATE — пропуск"; exit 0; fi
           fi
+          # защита от дубля: если метка уже стоит — значит пост уже ушёл
+          CODE=$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $GH" -H "Accept: application/vnd.github+json" "$API/contents/$SENT")
+          if [ "$CODE" = "200" ]; then echo "метка есть — уже опубликовано, пропуск"; exit 0; fi
+          if [ -z "$TG" ]; then echo "::error::секрет TG_BOT_TOKEN не задан"; exit 1; fi
           CAP=$(curl -sS "$CAPURL")
           R=$(curl -sS --get "https://api.telegram.org/bot$TG/sendPhoto" --data-urlencode "chat_id=$CHAT" --data-urlencode "photo=$IMG" --data-urlencode "caption=$CAP")
-          if echo "$R" | grep -q '"message_id"'; then
-            MID=$(echo "$R" | grep -o '"message_id":[0-9]*' | grep -o '[0-9]*' | head -1)
-            echo "✅ опубликовано: https://t.me/voleykon/$MID"
-          else echo "❌ ошибка: $R"; exit 1; fi
+          if ! echo "$R" | grep -q '"message_id"'; then echo "❌ ошибка: $R"; exit 1; fi
+          MID=$(echo "$R" | grep -o '"message_id":[0-9]*' | grep -o '[0-9]*' | head -1)
+          echo "✅ опубликовано: https://t.me/voleykon/$MID"
+          # ставим метку, чтобы следующие тики крона не запостили повторно
+          B64=$(printf 'posted mid=%s at %s\n' "$MID" "$(date -u +%FT%TZ)" | base64 | tr -d '\n')
+          curl -sS -X PUT -H "Authorization: Bearer $GH" -H "Accept: application/vnd.github+json" "$API/contents/$SENT" \
+            --data "{\"message\":\"sentinel: mikhaylov posted\",\"content\":\"$B64\"}" >/dev/null || true
