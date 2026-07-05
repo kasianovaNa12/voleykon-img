@@ -1,0 +1,38 @@
+name: TG w5-2 2026-07-07
+on:
+  schedule:
+    - cron: '2,17,32,47 16-18 7 7 *'
+  workflow_dispatch: {}
+permissions:
+  contents: write
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish to Telegram (idempotent)
+        env:
+          TG: ${{ secrets.TG_BOT_TOKEN }}
+          GH: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          POST_DATE: "2026-07-07"
+          IMG: "https://raw.githubusercontent.com/kasianovaNa12/voleykon-img/main/tg/w5-2-voleybol.jpg"
+          CAPURL: "https://raw.githubusercontent.com/kasianovaNa12/voleykon-img/main/tg/w5-2-voleybol.txt"
+          CHAT: "@voleykon"
+        run: |
+          set -e
+          API="https://api.github.com/repos/${GITHUB_REPOSITORY}"
+          SENT="sent/w5-2.done"
+          if [ "$EVENT" = "schedule" ]; then
+            TODAY=$(date -u +%F)
+            if [ "$TODAY" != "$POST_DATE" ]; then echo "$TODAY != $POST_DATE — skip"; exit 0; fi
+          fi
+          CODE=$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $GH" -H "Accept: application/vnd.github+json" "$API/contents/$SENT")
+          if [ "$CODE" = "200" ]; then echo "sentinel — already posted"; exit 0; fi
+          if [ -z "$TG" ]; then echo "::error::no TG_BOT_TOKEN"; exit 1; fi
+          CAP=$(curl -sS "$CAPURL")
+          R=$(curl -sS --get "https://api.telegram.org/bot$TG/sendPhoto" --data-urlencode "chat_id=$CHAT" --data-urlencode "photo=$IMG" --data-urlencode "caption=$CAP")
+          if ! echo "$R" | grep -q '"message_id"'; then echo "err: $R"; exit 1; fi
+          MID=$(echo "$R" | grep -o '"message_id":[0-9]*' | grep -o '[0-9]*' | head -1)
+          echo "posted https://t.me/voleykon/$MID"
+          B64=$(printf 'posted %s\n' "$MID" | base64 | tr -d '\n')
+          curl -sS -X PUT -H "Authorization: Bearer $GH" -H "Accept: application/vnd.github+json" "$API/contents/$SENT" --data "{\"message\":\"sentinel w5-2\",\"content\":\"$B64\"}" >/dev/null || true
